@@ -1,0 +1,135 @@
+package tournament
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"sort"
+	"strings"
+)
+
+type Entry struct {
+	Name string
+	MP   int
+	W    int
+	D    int
+	L    int
+	P    int
+}
+
+func readData(reader io.Reader) (string, error) {
+	var data string
+	var readError error
+	for {
+		buffer := make([]byte, 256)
+		n, err := reader.Read(buffer)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			readError = err
+			break
+		}
+		if n > 0 {
+			data += fmt.Sprintf("%s", buffer[:n])
+		}
+	}
+	return data, readError
+}
+
+func checkEntryExists(entries *[]Entry, team string) int {
+	var index int
+	values := *entries
+	for i, e := range values {
+		if e.Name == team {
+			index = i
+			break
+		}
+	}
+	if index == 0 {
+		if len(values) == 0 || (len(values) > 0 && values[0].Name != team) {
+			*entries = append(values, Entry{Name: team})
+			index = len(*entries) - 1
+		}
+	}
+	return index
+}
+
+func Tally(reader io.Reader, writer io.Writer) error {
+	stringData, err := readData(reader)
+	entries := []Entry{}
+	for _, row := range strings.Split(stringData, "\n") {
+		if len(row) == 0 || strings.HasPrefix(row, "#") {
+			continue
+		}
+
+		matchInfo := strings.Split(row, ";")
+		if len(matchInfo) < 3 {
+			err = errors.New("not enough match info")
+			break
+		}
+		team1 := strings.TrimSpace(matchInfo[0])
+		team2 := strings.TrimSpace(matchInfo[1])
+		result := strings.TrimSpace(matchInfo[2])
+
+		team1Index := checkEntryExists(&entries, team1)
+		team2Index := checkEntryExists(&entries, team2)
+		team1Entry := entries[team1Index]
+		team2Entry := entries[team2Index]
+
+		team1Entry.MP++
+		team2Entry.MP++
+		switch result {
+		case "win":
+			team1Entry.W++
+			team1Entry.P += 3
+			team2Entry.L++
+		case "loss":
+			team1Entry.L++
+			team2Entry.W++
+			team2Entry.P += 3
+		case "draw":
+			team1Entry.D++
+			team1Entry.P += 1
+			team2Entry.D++
+			team2Entry.P += 1
+		default:
+			err = errors.New("unkown result")
+			break
+		}
+		entries[team1Index] = team1Entry
+		entries[team2Index] = team2Entry
+	}
+
+	if err != nil {
+		return err
+	}
+
+	header := "Team                           | MP |  W |  D |  L |  P\n"
+	_, error := io.WriteString(writer, header)
+	if error != nil {
+		return error
+	}
+
+	sort.Slice(entries, func(a, b int) bool {
+		if e1, e2 := entries[a].P, entries[b].P; e1 != e2 {
+			return entries[a].P > entries[b].P
+		}
+		return entries[a].Name < entries[b].Name
+	})
+
+	for _, entry := range entries {
+		format := "%-31s|%3d |%3d |%3d |%3d |%3d\n"
+		info := fmt.Sprintf(format, entry.Name, entry.MP, entry.W, entry.D, entry.L, entry.P)
+		_, err = io.WriteString(writer, info)
+		if err != nil {
+			return err
+		}
+	}
+
+	//_, writeErr := io.WriteString(writer, "\n")
+	//if writeErr != nil {
+	//	err = writeErr
+	//}
+	return nil
+}
